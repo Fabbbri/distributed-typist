@@ -188,3 +188,79 @@ cleanup:
     errno = savedError;
     return result;
 }
+
+int decryptFile(FILE *input, FILE *output, const unsigned char *key) {
+    EVP_CIPHER_CTX *context = NULL;
+    struct stat inputInfo;
+    unsigned char header[ENCRYPTION_HEADER_SIZE];
+    unsigned char tag[ENCRYPTION_TAG_SIZE];
+    unsigned char cipherBlock[TRANSFER_BLOCK_SIZE];
+    unsigned char plainBlock[TRANSFER_BLOCK_SIZE + EVP_MAX_BLOCK_LENGTH];
+    uint64_t remainingBytes = 0;
+    int plainLength = 0;
+    int result = -1;
+    int savedError = 0;
+
+    // Valida el contenedor completo antes de reservar el contexto criptográfico.
+    if (input == NULL || output == NULL || input == output || key == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (fstat(fileno(input), &inputInfo) == -1) {
+        return -1;
+    }
+    if (!S_ISREG(inputInfo.st_mode) || inputInfo.st_size < ENCRYPTION_OVERHEAD ||
+        (uint64_t)inputInfo.st_size > MAX_TRANSFER_SIZE ||
+        fread(header, 1, sizeof(header), input) != sizeof(header) ||
+        memcmp(header, ENCRYPTION_MAGIC, sizeof(ENCRYPTION_MAGIC) - 1) != 0) {
+        errno = EBADMSG;
+        return -1;
+    }
+    remainingBytes = (uint64_t)inputInfo.st_size - ENCRYPTION_OVERHEAD;
+    context = EVP_CIPHER_CTX_new();
+    if (context == NULL) {
+        errno = ENOMEM;
+        return -1;
+    }
+    // Reproduce el nonce y el AAD; el resultado todavía no está autenticado.
+    if (EVP_DecryptInit_ex(context, EVP_aes_256_gcm(), NULL, key,
+                           header + sizeof(ENCRYPTION_MAGIC) - 1) != 1 ||
+        EVP_DecryptUpdate(context, NULL, &plainLength, header, sizeof(header)) != 1) {
+        errno = EIO;
+        goto cleanup;
+    }
+    while (remainingBytes > 0) {
+        size_t blockSize = remainingBytes < sizeof(cipherBlock) ?
+            (size_t)remainingBytes : sizeof(cipherBlock);
+
+        // Solo escribe en el temporal del llamador; una etiqueta inválida lo descarta.
+        if (fread(cipherBlock, 1, blockSize, input) != blockSize ||
+            EVP_DecryptUpdate(context, plainBlock, &plainLength,
+                              cipherBlock, (int)blockSize) != 1 ||
+            plainLength != (int)blockSize ||
+            fwrite(plainBlock, 1, (size_t)plainLength, output) != (size_t)plainLength) {
+            errno = EIO;
+            goto cleanup;
+        }
+        remainingBytes -= blockSize;
+    }
+    // Ningún consumidor puede contar palabras ni publicar texto sin verificar este tag.
+    if (fread(tag, 1, sizeof(tag), input) != sizeof(tag) ||
+        fgetc(input) != EOF || ferror(input) ||
+        EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_SET_TAG, sizeof(tag), tag) != 1 ||
+        EVP_DecryptFinal_ex(context, plainBlock, &plainLength) != 1 || plainLength != 0) {
+        errno = EBADMSG;
+        goto cleanup;
+    }
+    if (fflush(output) == EOF || fseeko(output, 0, SEEK_SET) == -1) {
+        goto cleanup;
+    }
+    result = 0;
+
+cleanup:
+    savedError = errno;
+    OPENSSL_cleanse(plainBlock, sizeof(plainBlock));
+    EVP_CIPHER_CTX_free(context);
+    errno = savedError;
+    return result;
+}

@@ -32,4 +32,14 @@ int loadEncryptionKey(const char *keyPath, unsigned char *key);
  */
 int encryptFile(FILE *input, FILE *output, uint64_t fileSize, const unsigned char *key);
 
+/**
+ * @brief Descifra DTG1 y verifica su etiqueta antes de permitir utilizar el resultado.
+ * @param input Contenedor regular al inicio, no NULL; conserva su propiedad el llamador.
+ * @param output Temporal vacío, no NULL; debe descartarse íntegramente ante un error.
+ * @param key Clave de ENCRYPTION_KEY_SIZE bytes, no NULL.
+ * @return 0 con salida autenticada y rebobinada, -1 con errno si falla.
+ * Puede escribir texto provisional: el llamador nunca debe publicarlo antes del éxito.
+ */
+int decryptFile(FILE *input, FILE *output, const unsigned char *key);
+
 #endif
