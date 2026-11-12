@@ -1,0 +1,79 @@
+# ============================================================
+# Proyecto 2 - Principios de Sistemas Operativos
+# C / Linux / OpenMPI / modulo de kernel / ESP32
+# ============================================================
+
+# Compilacion en C y bibliotecas generadas
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.out
+*.elf
+*.map
+*.d
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+/build/
+/bin/
+/dist/
+
+# Modulos del kernel de Linux: archivos generados por Kbuild
+*.ko
+*.ko.*
+*.mod
+*.mod.c
+*.mod.o
+*.symvers
+Module.symvers
+modules.order
+.tmp_versions/
+.*.cmd
+*.order
+
+# Firmware del ESP32: compilacion y flasheo
+**/build/
+**/.pio/
+**/sdkconfig.old
+*.bin
+*.hex
+*.uf2
+
+# Archivos temporales, copias y editores
+*~
+*.swp
+*.swo
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.codex/
+
+# Registros, fallos y depuracion
+*.log
+core
+core.*
+*.core
+*.pid
+*.stackdump
+
+# Resultados generados durante la ejecucion (no ocultar los datos de prueba)
+/cifrado.txt
+/descifrado.txt
+/output/
+/results/
+
+# Datos privados o locales
+.env
+.env.*
+!.env.example
+
+# IMPORTANTE: conservar en Git el codigo fuente, encabezados,
+# Makefile(s), documentacion, ejemplos y archivos de configuracion
+# necesarios para compilar y ejecutar el proyecto.
