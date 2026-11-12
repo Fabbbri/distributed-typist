@@ -28,7 +28,7 @@ int parseEndpoint(const char *address, const char *port, struct sockaddr_in *end
         errno = EINVAL;
         return -1;
     }
-    // Construye la dirección en orden de red y limita esta etapa sin cifrado a 127.0.0.0/8.
+    // Construye la dirección en orden de red y mantiene las pruebas limitadas a loopback.
     memset(endpoint, 0, sizeof(*endpoint));
     endpoint->sin_family = AF_INET;
     endpoint->sin_port = htons((uint16_t)portNumber);
@@ -106,9 +106,13 @@ int receiveAll(int socketFd, void *buffer, size_t length) {
 }
 
 int sendHeader(int socketFd, uint64_t fileSize) {
-    unsigned char header[TRANSFER_HEADER_SIZE] = {'D', 'T', 'P', '1'};
+    unsigned char header[TRANSFER_HEADER_SIZE] = {'D', 'T', 'P', '2'};
 
-    if (fileSize > MAX_FILE_SIZE) {
+    if (fileSize < ENCRYPTION_OVERHEAD) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (fileSize > MAX_TRANSFER_SIZE) {
         errno = EFBIG;
         return -1;
     }
@@ -131,7 +135,7 @@ int receiveHeader(int socketFd, uint64_t *fileSize) {
     if (receiveAll(socketFd, header, sizeof(header)) == -1) {
         return -1;
     }
-    if (memcmp(header, "DTP1", 4) != 0) {
+    if (memcmp(header, "DTP2", 4) != 0) {
         errno = EPROTO;
         return -1;
     }
@@ -140,7 +144,11 @@ int receiveHeader(int socketFd, uint64_t *fileSize) {
         decodedSize = (decodedSize << 8) | header[index];
     }
     // Publica el tamaño al llamador únicamente cuando cumple el límite de recepción.
-    if (decodedSize > MAX_FILE_SIZE) {
+    if (decodedSize < ENCRYPTION_OVERHEAD) {
+        errno = EPROTO;
+        return -1;
+    }
+    if (decodedSize > MAX_TRANSFER_SIZE) {
         errno = EFBIG;
         return -1;
     }
@@ -182,7 +190,7 @@ int sendFile(int socketFd, FILE *input, uint64_t fileSize) {
     unsigned char buffer[TRANSFER_BLOCK_SIZE];
     uint64_t remainingBytes = fileSize;
 
-    if (input == NULL || fileSize > MAX_FILE_SIZE) {
+    if (input == NULL || fileSize > MAX_TRANSFER_SIZE) {
         errno = EINVAL;
         return -1;
     }
@@ -219,7 +227,7 @@ int receiveFile(int socketFd, FILE *output, uint64_t fileSize) {
     unsigned char buffer[TRANSFER_BLOCK_SIZE];
     uint64_t remainingBytes = fileSize;
 
-    if (output == NULL || fileSize > MAX_FILE_SIZE) {
+    if (output == NULL || fileSize > MAX_TRANSFER_SIZE) {
         errno = EINVAL;
         return -1;
     }

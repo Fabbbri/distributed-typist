@@ -68,6 +68,7 @@ core.*
 /descifrado.txt
 /output/
 /results/
+/keys/
 
 # Datos privados o locales
 .env

@@ -128,7 +128,7 @@ static void handleTransfer(int socketFd, const char *outputPath) {
     // El temporal ya es el archivo final: deja de ser un recurso pendiente de eliminación.
     stagingPath[0] = '\0';
     status = TRANSFER_SUCCESS;
-    printf("INFO: stored %" PRIu64 " bytes in %s\n", fileSize, outputPath);
+    printf("INFO: stored encrypted container (%" PRIu64 " bytes) in %s\n", fileSize, outputPath);
 
 cleanup:
     // Un fallo previo a rename elimina el temporal y conserva la salida anterior.
@@ -220,7 +220,7 @@ int runServer(const char *address, const char *port, const char *outputPath) {
         goto cleanup;
     }
     // Publica el aviso de disponibilidad incluso con stdout redirigido antes de atender.
-    printf("INFO: listening on %s:%s (local plaintext tests only)\n", address, port);
+    printf("INFO: listening on %s:%s (local encrypted file storage)\n", address, port);
     if (fflush(stdout) == EOF) {
         perror("ERROR: flush startup message");
         goto cleanup;
@@ -237,7 +237,7 @@ cleanup:
 }
 
 /**
- * @brief Inicia el servidor secuencial para pruebas TCP locales sin cifrado.
+ * @brief Inicia el servidor secuencial de almacenamiento de archivos cifrados en loopback.
  * @param argumentCount Cantidad de argumentos, incluido el ejecutable.
  * @param arguments Ejecutable, dirección, puerto y ruta de destino.
  * @return EXIT_SUCCESS al detenerse normalmente, EXIT_FAILURE ante errores de servicio.

@@ -1,10 +1,12 @@
 #include "client.h"
+#include "crypto.h"
 #include "protocol.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <openssl/crypto.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -12,6 +14,7 @@
 #include <unistd.h>
 
 #define COMMAND_BUFFER_SIZE (PATH_MAX + 32)
+#define DEFAULT_KEY_FILE "keys/client.key"
 
 typedef enum {
     COMMAND_READ_ERROR = -1,
@@ -68,6 +71,57 @@ static FILE *openInput(const char *filePath, uint64_t *fileSize) {
 }
 
 /**
+ * @brief Prepara una copia temporal cifrada antes de abrir la conexión TCP.
+ * @param filePath Ruta del origen, previamente validada.
+ * @param encryptedSize Recibe el tamaño del contenedor cifrado, no NULL.
+ * @return Temporal cifrado al inicio, que debe cerrar el llamador, o NULL con errno.
+ */
+static FILE *prepareEncryptedInput(const char *filePath, uint64_t *encryptedSize) {
+    unsigned char key[ENCRYPTION_KEY_SIZE] = {0};
+    const char *keyPath = getenv("TYPIST_KEY_FILE");
+    uint64_t plainSize = 0;
+    FILE *plainInput = openInput(filePath, &plainSize);
+    FILE *encryptedInput = NULL;
+    int result = -1;
+    int savedError = 0;
+
+    if (plainInput == NULL) {
+        return NULL;
+    }
+    // La clave se obtiene localmente; nunca se incluye en el archivo ni en mensajes de red.
+    if (loadEncryptionKey(keyPath != NULL ? keyPath : DEFAULT_KEY_FILE, key) == -1) {
+        savedError = errno;
+        perror("ERROR: load private 32-byte key; configure TYPIST_KEY_FILE or run make keygen");
+        errno = savedError;
+        goto cleanup;
+    }
+    // Solo el contenido cifrado utiliza disco temporal; la memoria permanece acotada.
+    encryptedInput = tmpfile();
+    if (encryptedInput == NULL || encryptFile(plainInput, encryptedInput, plainSize, key) == -1 ||
+        fseeko(encryptedInput, 0, SEEK_SET) == -1) {
+        goto cleanup;
+    }
+    *encryptedSize = plainSize + ENCRYPTION_OVERHEAD;
+    result = 0;
+
+cleanup:
+    savedError = errno;
+    OPENSSL_cleanse(key, sizeof(key));
+    if (fclose(plainInput) == EOF && result == 0) {
+        savedError = errno;
+        result = -1;
+    }
+    if (result == -1) {
+        if (encryptedInput != NULL && fclose(encryptedInput) == EOF) {
+            perror("WARN: close encrypted temporary file");
+        }
+        errno = savedError;
+        return NULL;
+    }
+    return encryptedInput;
+}
+
+/**
  * @brief Exige el estado esperado y registra rechazos o pérdida de confirmación.
  * @param socketFd Socket conectado.
  * @param expectedStatus Estado requerido en esta fase.
@@ -96,14 +150,14 @@ int runClient(const char *address, const char *port, const char *filePath) {
     int socketFd = -1;
     int result = -1;
 
-    // Valida la configuración y el origen antes de adquirir recursos de red.
+    // Valida y cifra el origen completo antes de adquirir recursos de red.
     if (filePath == NULL || *filePath == '\0' || parseEndpoint(address, port, &endpoint) == -1) {
         fprintf(stderr, "ERROR: expected loopback IPv4, port 1..65535 and file path\n");
         return -1;
     }
-    input = openInput(filePath, &fileSize);
+    input = prepareEncryptedInput(filePath, &fileSize);
     if (input == NULL) {
-        perror("ERROR: open regular input file (maximum 1 GiB)");
+        perror("ERROR: prepare encrypted input (regular file, maximum plaintext 1 GiB)");
         return -1;
     }
     // Establece la conexión con esperas acotadas para evitar bloqueos indefinidos de E/S.
@@ -121,7 +175,7 @@ int runClient(const char *address, const char *port, const char *filePath) {
     if (checkStatus(socketFd, TRANSFER_READY) == -1) {
         goto cleanup;
     }
-    // El envío por bloques y el cierre del origen deben terminar antes de señalar el EOF.
+    // Transmite únicamente el contenedor cifrado y elimina su temporal al cerrar el flujo.
     if (sendFile(socketFd, input, fileSize) == -1) {
         perror("ERROR: send file");
         goto cleanup;

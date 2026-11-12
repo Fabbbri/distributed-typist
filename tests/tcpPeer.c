@@ -1,6 +1,7 @@
 #include "protocol.h"
 
 #include <errno.h>
+#include <openssl/crypto.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -43,14 +44,60 @@ static int sendFragmented(int socketFd, const unsigned char *bytes, size_t lengt
 }
 
 /**
+ * @brief Construye un contenedor válido pequeño y lo envía byte a byte junto a su cabecera.
+ * @param socketFd Conexión al servidor real.
+ * @param message Texto de prueba terminado en cero, no NULL.
+ * @return 0 al enviar, -1 ante errores del auxiliar.
+ */
+static int sendEncryptedFragmented(int socketFd, const char *message) {
+    unsigned char key[ENCRYPTION_KEY_SIZE] = {0};
+    unsigned char header[TRANSFER_HEADER_SIZE] = {'D', 'T', 'P', '2'};
+    unsigned char envelope[TRANSFER_BLOCK_SIZE];
+    size_t messageLength = strlen(message);
+    size_t envelopeSize = messageLength + ENCRYPTION_OVERHEAD;
+    FILE *plainInput = tmpfile();
+    FILE *encrypted = tmpfile();
+    int result = -1;
+
+    // El tamaño elegido cabe en un byte; la misma clave efímera de la suite cifra el mensaje.
+    if (plainInput == NULL || encrypted == NULL || envelopeSize > UINT8_MAX ||
+        loadEncryptionKey(getenv("TYPIST_KEY_FILE"), key) == -1 ||
+        fwrite(message, 1, messageLength, plainInput) != messageLength ||
+        fseeko(plainInput, 0, SEEK_SET) == -1 ||
+        encryptFile(plainInput, encrypted, messageLength, key) == -1 ||
+        fseeko(encrypted, 0, SEEK_SET) == -1 ||
+        fread(envelope, 1, envelopeSize, encrypted) != envelopeSize) {
+        goto cleanup;
+    }
+    header[TRANSFER_HEADER_SIZE - 1] = (unsigned char)envelopeSize;
+    if (sendFragmented(socketFd, header, sizeof(header)) == -1 ||
+        expectStatus(socketFd, TRANSFER_READY) == -1 ||
+        sendFragmented(socketFd, envelope, envelopeSize) == -1) {
+        goto cleanup;
+    }
+    result = 0;
+
+cleanup:
+    OPENSSL_cleanse(key, sizeof(key));
+    if (plainInput != NULL && fclose(plainInput) == EOF) {
+        result = -1;
+    }
+    if (encrypted != NULL && fclose(encrypted) == EOF) {
+        result = -1;
+    }
+    return result;
+}
+
+/**
  * @brief Ejecuta casos de protocolo inválido o fragmentado contra el servidor real.
  * @param socketFd Socket conectado que conserva el llamador.
  * @param mode Nombre del caso seleccionado.
  * @return 0 si se observa el comportamiento esperado, -1 si falla.
  */
 static int exerciseServer(int socketFd, const char *mode) {
-    unsigned char header[TRANSFER_HEADER_SIZE] = {'D', 'T', 'P', '1'};
-    const unsigned char message[] = "fragmented\n";
+    unsigned char header[TRANSFER_HEADER_SIZE] = {'D', 'T', 'P', '2'};
+    const char *message = "fragmented\n";
+    const unsigned char incompleteBody[ENCRYPTION_OVERHEAD + 1] = {0};
     TransferStatus expectedStatus = TRANSFER_INVALID;
 
     if (strcmp(mode, "partialHeader") == 0) {
@@ -58,28 +105,28 @@ static int exerciseServer(int socketFd, const char *mode) {
         if (sendAll(socketFd, header, 5) == -1) {
             return -1;
         }
-    } else if (strcmp(mode, "badMagic") == 0 || strcmp(mode, "oversize") == 0) {
+    } else if (strcmp(mode, "badMagic") == 0 || strcmp(mode, "oversize") == 0 ||
+               strcmp(mode, "legacy") == 0 || strcmp(mode, "belowMinimum") == 0) {
         // Altera la versión o anuncia UINT64_MAX para comprobar el rechazo de la cabecera.
         if (strcmp(mode, "badMagic") == 0) {
             header[0] = 'X';
-        } else {
+        } else if (strcmp(mode, "oversize") == 0) {
             memset(header + 4, 255, 8);
+        } else if (strcmp(mode, "legacy") == 0) {
+            header[3] = '1';
         }
         if (sendAll(socketFd, header, sizeof(header)) == -1) {
             return -1;
         }
     } else if (strcmp(mode, "fragmented") == 0) {
-        // El tamaño cabe en el último byte; cabecera y cuerpo se envían byte a byte.
-        header[TRANSFER_HEADER_SIZE - 1] = (unsigned char)(sizeof(message) - 1);
-        if (sendFragmented(socketFd, header, sizeof(header)) == -1 ||
-            expectStatus(socketFd, TRANSFER_READY) == -1 ||
-            sendFragmented(socketFd, message, sizeof(message) - 1) == -1) {
+        // Tanto la cabecera TCP como el contenedor GCM se fragmentan en envíos de un byte.
+        if (sendEncryptedFragmented(socketFd, message) == -1) {
             return -1;
         }
         expectedStatus = TRANSFER_SUCCESS;
     } else if (strcmp(mode, "truncated") == 0 || strcmp(mode, "reset") == 0 ||
                strcmp(mode, "extra") == 0 || strcmp(mode, "stall") == 0) {
-        uint64_t declaredSize = strcmp(mode, "extra") == 0 ? 0 : 32;
+        uint64_t declaredSize = strcmp(mode, "extra") == 0 ? ENCRYPTION_OVERHEAD : 64;
 
         // Primero completa la negociación para aislar los errores de la fase del cuerpo.
         if (sendHeader(socketFd, declaredSize) == -1 ||
@@ -100,11 +147,12 @@ static int exerciseServer(int socketFd, const char *mode) {
             }
             return expectStatus(socketFd, TRANSFER_INCOMPLETE);
         }
-        // El mismo cuerpo excede el tamaño cero o queda corto respecto a los 32 bytes.
-        if (sendAll(socketFd, message, sizeof(message) - 1) == -1) {
+        // El cuerpo excede el mínimo declarado o queda corto respecto a los 64 bytes.
+        if (sendAll(socketFd, incompleteBody, sizeof(incompleteBody)) == -1) {
             return -1;
         }
-        expectedStatus = declaredSize == 0 ? TRANSFER_INVALID : TRANSFER_INCOMPLETE;
+        expectedStatus = declaredSize == ENCRYPTION_OVERHEAD ?
+            TRANSFER_INVALID : TRANSFER_INCOMPLETE;
     } else {
         fprintf(stderr, "ERROR: unknown peer mode\n");
         return -1;

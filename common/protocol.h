@@ -6,8 +6,11 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "crypto.h"
+
 // Límites de esta etapa local; no son requisitos del proyecto completo.
 #define MAX_FILE_SIZE UINT64_C(1073741824)
+#define MAX_TRANSFER_SIZE (MAX_FILE_SIZE + ENCRYPTION_OVERHEAD)
 #define TRANSFER_BLOCK_SIZE 16384
 #define SOCKET_TIMEOUT_SECONDS 10
 #define TRANSFER_HEADER_SIZE 12
@@ -55,9 +58,9 @@ int sendAll(int socketFd, const void *buffer, size_t length);
 int receiveAll(int socketFd, void *buffer, size_t length);
 
 /**
- * @brief Envía la cabecera DTP1 y el tamaño de 64 bits en orden big endian.
+ * @brief Envía la cabecera DTP2 y el tamaño del archivo cifrado en orden big endian.
  * @param socketFd Socket conectado.
- * @param fileSize Tamaño entre cero y MAX_FILE_SIZE.
+ * @param fileSize Tamaño entre ENCRYPTION_OVERHEAD y MAX_TRANSFER_SIZE.
  * @return 0 al completar, -1 con errno si falla.
  */
 int sendHeader(int socketFd, uint64_t fileSize);
@@ -90,7 +93,7 @@ int receiveStatus(int socketFd, TransferStatus *status);
  * @brief Transmite un archivo por bloques y comprueba que no haya crecido.
  * @param socketFd Socket conectado.
  * @param input Archivo abierto en lectura al inicio; conserva su propiedad el llamador.
- * @param fileSize Tamaño previamente validado, hasta MAX_FILE_SIZE.
+ * @param fileSize Tamaño previamente validado, hasta MAX_TRANSFER_SIZE.
  * @return 0 al completar, -1 con errno ante errores o cambios de longitud.
  */
 int sendFile(int socketFd, FILE *input, uint64_t fileSize);
@@ -99,7 +102,7 @@ int sendFile(int socketFd, FILE *input, uint64_t fileSize);
  * @brief Recibe el contenido por bloques sin cargarlo completo en memoria.
  * @param socketFd Socket conectado.
  * @param output Archivo abierto para escritura; no se cierra ni se vacía aquí.
- * @param fileSize Tamaño previamente validado, hasta MAX_FILE_SIZE.
+ * @param fileSize Tamaño previamente validado, hasta MAX_TRANSFER_SIZE.
  * @return 0 al completar, -1 con errno ante errores de red o escritura.
  */
 int receiveFile(int socketFd, FILE *output, uint64_t fileSize);
