@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-/* Límites de esta etapa local; no son requisitos del proyecto completo. */
+// Límites de esta etapa local; no son requisitos del proyecto completo.
 #define MAX_FILE_SIZE UINT64_C(1073741824)
 #define TRANSFER_BLOCK_SIZE 16384
 #define SOCKET_TIMEOUT_SECONDS 10

@@ -21,8 +21,9 @@ externas. Las pruebas usan Bash, `timeout`, `cmp`, `sha256sum`, `truncate`, `mkf
 
 ```sh
 make          # Cliente y servidor: bin/client y bin/server
-make client   # Solo cliente
-make server   # Solo servidor
+make client   # Compila si hace falta y abre el cliente interactivo
+make server   # Compila si hace falta e inicia el servidor
+make bin/client bin/server  # Solo compila los dos ejecutables
 make clean    # Elimina los tres ejecutables generados, incluido el auxiliar de pruebas
 ```
 
@@ -33,24 +34,62 @@ Se compila con C11, `-Wall -Wextra -Wpedantic` y tamaños de archivo de 64 bits.
 Desde la raíz del repositorio, terminal 1:
 
 ```sh
-mkdir -p output
-./bin/server 127.0.0.1 5000 output/recibido.txt
+make server
 ```
 
-Terminal 2:
+La carpeta `input/` está dedicada a los archivos que enviará el cliente e incluye
+`example.txt` como documento de prueba. Terminal 2:
 
 ```sh
-printf 'Prueba local de transporte TCP.\n' > /tmp/entrada-tcp.txt
-./bin/client 127.0.0.1 5000 /tmp/entrada-tcp.txt
-cmp /tmp/entrada-tcp.txt output/recibido.txt
-sha256sum /tmp/entrada-tcp.txt output/recibido.txt
+make client
 ```
 
-Los argumentos son obligatorios: dirección, puerto decimal (1–65535) y ruta del archivo.
+Con el cliente activo, escribir en su consola:
+
+```text
+enviar example.txt
+salir
+```
+
+`enviar example.txt` busca el archivo en `input/`. También se admiten rutas explícitas, como
+`enviar input/example.txt` o `enviar /tmp/prueba.txt`. Los nombres con espacios se escriben
+directamente, por ejemplo `enviar documento de prueba.txt`, sin comillas. Cada orden abre
+una conexión, espera el resultado y vuelve al indicador `client>`. Los errores de órdenes,
+archivos o transferencias permiten seguir usando la consola. `salir` o EOF (`Ctrl+D` en una
+línea vacía) terminan la sesión; no se establece una conexión hasta solicitar un envío.
+
+Por defecto se usa `127.0.0.1:5000`, el directorio de entrada `input/` y el destino
+`output/recibido.txt`. `make server` crea el directorio de destino si es necesario.
+Para cambiar la configuración, usar las mismas dirección y puerto en ambas terminales:
+
+```sh
+make server ADDRESS=127.0.0.1 PORT=6000 OUTPUT_FILE=output/otro.txt
+make client ADDRESS=127.0.0.1 PORT=6000 INPUT_DIR=input
+```
+
+Después de salir del cliente, comprobar la integridad desde la terminal:
+
+```sh
+cmp input/example.txt output/recibido.txt
+sha256sum input/example.txt output/recibido.txt
+```
+
+También se conserva el modo de envío individual y se puede iniciar la consola directamente:
+
+```sh
+./bin/server 127.0.0.1 5000 output/recibido.txt
+./bin/client 127.0.0.1 5000 input/example.txt
+./bin/client --interactive 127.0.0.1 5000 input
+```
+
+Al ejecutar los binarios directamente, los argumentos son obligatorios: dirección, puerto
+decimal (1–65535) y ruta del archivo o directorio de entrada en el modo interactivo.
 El servidor configura su dirección de escucha y destino; el cliente configura la dirección
-del servidor y el origen. El directorio de destino debe existir. El cliente devuelve 0 solo
-si recibe la confirmación final de éxito y cierra sus recursos sin errores; devuelve 1
-ante errores. El servidor permanece atendiendo clientes secuencialmente tras cada conexión,
+del servidor y el origen. El directorio de destino debe existir al iniciar el binario directamente.
+En modo individual, el cliente devuelve 0 solo si recibe la confirmación final de éxito y
+cierra sus recursos sin errores; devuelve 1 ante errores. La consola devuelve 0 al recibir
+`salir` o EOF aunque algún envío haya fallado, y 1 ante configuración o lectura inválidas.
+El servidor permanece atendiendo clientes secuencialmente tras cada conexión,
 incluso si una transferencia falla. Cada éxito reemplaza el archivo de destino anterior.
 Para conservar varias transferencias, copiar el resultado o reiniciar con otra ruta.
 
@@ -111,10 +150,11 @@ Decisiones de implementación para esta etapa:
 
 | Archivos | Responsabilidad |
 | --- | --- |
-| `client/client.c`, `client/client.h` | Argumentos, archivo de entrada, conexión y confirmaciones |
+| `client/client.c`, `client/client.h` | Consola, argumentos, entrada, conexión y confirmaciones |
 | `server/server.c`, `server/server.h` | Escucha, recepción secuencial, publicación y limpieza |
 | `common/protocol.c`, `common/protocol.h` | Formato, estados, límites y E/S completa por bloques |
-| `Makefile` | Compilación individual/conjunta, pruebas y limpieza |
+| `Makefile` | Compilación, arranque configurable del cliente/servidor, pruebas y limpieza |
+| `input/` | Archivos de entrada para enviar con el cliente; incluye `example.txt` |
 | `tests/tcpPeer.c`, `tests/run.sh` | Auxiliar C y coordinación de pruebas de integración |
 
 Las funciones internas son `static`; los encabezados exponen solo las interfaces del módulo.
@@ -131,6 +171,9 @@ La suite usa exclusivamente loopback y archivos temporales. Inicia los programas
 procesos separados y comprueba sus códigos de salida. Verifica archivos pequeños, texto de
 32 MiB y archivos vacíos mediante **`cmp` y SHA-256**, conexiones sucesivas, entradas
 inexistentes/no regulares/excesivas, argumentos inválidos, puerto ocupado y conexión rechazada.
+También ejecuta `make server` y `make client`, verifica varios envíos desde una consola,
+rutas con espacios, recuperación tras errores, comandos inválidos o demasiado largos,
+bytes nulos en la entrada y cierre por `salir` o EOF, incluida una última línea sin salto.
 
 El auxiliar C prueba cabeceras y cuerpo enviados byte a byte, cabeceras truncadas o inválidas,
 tamaños de red excesivos, cuerpo incompleto, bytes extra, cierre con RST y cliente inactivo

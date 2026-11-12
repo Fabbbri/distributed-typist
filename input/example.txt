@@ -1,0 +1,5 @@
+Documento de ejemplo para pruebas locales de transferencia TCP.
+Proyecto 2: Principios de Sistemas Operativos, CE4303.
+Este texto permite comprobar que el servidor recibe el contenido completo.
+Incluye acentos: á, é, í, ó, ú y ñ.
+Fin del documento de prueba.

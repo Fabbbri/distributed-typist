@@ -33,6 +33,7 @@ static int expectStatus(int socketFd, TransferStatus expectedStatus) {
 static int sendFragmented(int socketFd, const unsigned char *bytes, size_t length) {
     const struct timespec delay = {0, 2000000};
 
+    // Las pausas favorecen entregas parciales sin suponer límites de mensajes en TCP.
     for (size_t index = 0; index < length; index++) {
         if (sendAll(socketFd, bytes + index, 1) == -1 || nanosleep(&delay, NULL) == -1) {
             return -1;
@@ -53,10 +54,12 @@ static int exerciseServer(int socketFd, const char *mode) {
     TransferStatus expectedStatus = TRANSFER_INVALID;
 
     if (strcmp(mode, "partialHeader") == 0) {
+        // El EOF posterior dejará incompleta la cabecera, antes de preparar la salida.
         if (sendAll(socketFd, header, 5) == -1) {
             return -1;
         }
     } else if (strcmp(mode, "badMagic") == 0 || strcmp(mode, "oversize") == 0) {
+        // Altera la versión o anuncia UINT64_MAX para comprobar el rechazo de la cabecera.
         if (strcmp(mode, "badMagic") == 0) {
             header[0] = 'X';
         } else {
@@ -66,6 +69,7 @@ static int exerciseServer(int socketFd, const char *mode) {
             return -1;
         }
     } else if (strcmp(mode, "fragmented") == 0) {
+        // El tamaño cabe en el último byte; cabecera y cuerpo se envían byte a byte.
         header[TRANSFER_HEADER_SIZE - 1] = (unsigned char)(sizeof(message) - 1);
         if (sendFragmented(socketFd, header, sizeof(header)) == -1 ||
             expectStatus(socketFd, TRANSFER_READY) == -1 ||
@@ -77,22 +81,26 @@ static int exerciseServer(int socketFd, const char *mode) {
                strcmp(mode, "extra") == 0 || strcmp(mode, "stall") == 0) {
         uint64_t declaredSize = strcmp(mode, "extra") == 0 ? 0 : 32;
 
+        // Primero completa la negociación para aislar los errores de la fase del cuerpo.
         if (sendHeader(socketFd, declaredSize) == -1 ||
             expectStatus(socketFd, TRANSFER_READY) == -1) {
             return -1;
         }
         if (strcmp(mode, "reset") == 0) {
+            // El cierre que realiza main enviará RST en lugar de un EOF normal.
             const struct linger resetConnection = {1, 0};
             return setsockopt(socketFd, SOL_SOCKET, SO_LINGER,
                               &resetConnection, sizeof(resetConnection));
         }
         if (strcmp(mode, "stall") == 0) {
+            // Mantiene la conexión abierta sin datos hasta superar la espera del servidor.
             const struct timespec delay = {SOCKET_TIMEOUT_SECONDS + 2, 0};
             if (nanosleep(&delay, NULL) == -1) {
                 return -1;
             }
             return expectStatus(socketFd, TRANSFER_INCOMPLETE);
         }
+        // El mismo cuerpo excede el tamaño cero o queda corto respecto a los 32 bytes.
         if (sendAll(socketFd, message, sizeof(message) - 1) == -1) {
             return -1;
         }
@@ -101,6 +109,7 @@ static int exerciseServer(int socketFd, const char *mode) {
         fprintf(stderr, "ERROR: unknown peer mode\n");
         return -1;
     }
+    // Señala fin del envío y conserva la recepción para comprobar el resultado del servidor.
     if (shutdown(socketFd, SHUT_WR) == -1) {
         return -1;
     }
@@ -119,6 +128,7 @@ static int exerciseClient(int listenerFd, const char *mode) {
     uint64_t fileSize = 0;
     FILE *discardFile = NULL;
 
+    // El coordinador espera este aviso antes de iniciar el cliente real.
     if (puts("INFO: listening") == EOF || fflush(stdout) == EOF) {
         return -1;
     }
@@ -126,10 +136,12 @@ static int exerciseClient(int listenerFd, const char *mode) {
     if (connectionFd == -1) {
         return -1;
     }
+    // Recibe una cabecera real antes de provocar el fallo seleccionado.
     if (configureSocket(connectionFd) == -1 || receiveHeader(connectionFd, &fileSize) == -1) {
         goto cleanup;
     }
     if (strcmp(mode, "invalidStatus") == 0) {
+        // Comprueba que el cliente rechace un código ajeno al protocolo.
         const unsigned char invalidStatus = 255;
         result = sendAll(connectionFd, &invalidStatus, 1);
         goto cleanup;
@@ -138,6 +150,7 @@ static int exerciseClient(int listenerFd, const char *mode) {
         goto cleanup;
     }
     if (strcmp(mode, "drop") == 0) {
+        // Espera a que empiece el cuerpo y prepara un cierre abrupto durante la transferencia.
         const struct linger resetConnection = {1, 0};
         unsigned char firstByte = 0;
 
@@ -147,6 +160,7 @@ static int exerciseClient(int listenerFd, const char *mode) {
         result = setsockopt(connectionFd, SOL_SOCKET, SO_LINGER,
                             &resetConnection, sizeof(resetConnection));
     } else {
+        // Consume todo el archivo, pero cierra sin confirmar para ejercitar la pérdida del ACK.
         discardFile = tmpfile();
         if (discardFile == NULL || receiveFile(connectionFd, discardFile, fileSize) == -1 ||
             expectStreamEnd(connectionFd) == -1) {
@@ -156,6 +170,7 @@ static int exerciseClient(int listenerFd, const char *mode) {
     }
 
 cleanup:
+    // Tanto los fallos provocados como los del auxiliar convergen en la misma liberación.
     if (discardFile != NULL && fclose(discardFile) == EOF) {
         result = -1;
     }
@@ -178,6 +193,7 @@ int main(int argumentCount, char *arguments[]) {
     int reuseAddress = 1;
     int isListener = 0;
 
+    // Prepara un extremo local; el puerto provisional solo se usa para el modo de búsqueda.
     if (argumentCount < 2 || argumentCount > 3) {
         return EXIT_FAILURE;
     }
@@ -190,6 +206,7 @@ int main(int argumentCount, char *arguments[]) {
         goto cleanup;
     }
     if (strcmp(arguments[1], "port") == 0) {
+        // El puerto cero solicita uno libre al kernel; se informa y se libera al salir.
         socklen_t endpointSize = sizeof(endpoint);
         endpoint.sin_port = 0;
         if (bind(socketFd, (struct sockaddr *)&endpoint, sizeof(endpoint)) == 0 &&
@@ -198,6 +215,7 @@ int main(int argumentCount, char *arguments[]) {
         }
         goto cleanup;
     }
+    // Selecciona el papel del auxiliar según se pruebe el cliente o el servidor real.
     isListener = strcmp(arguments[1], "drop") == 0 || strcmp(arguments[1], "noAck") == 0 ||
         strcmp(arguments[1], "invalidStatus") == 0;
     if (isListener) {
@@ -213,6 +231,7 @@ int main(int argumentCount, char *arguments[]) {
     }
 
 cleanup:
+    // El cierre también materializa el RST cuando el caso de prueba configuró SO_LINGER.
     if (result == -1) {
         perror("ERROR: TCP test peer");
     }

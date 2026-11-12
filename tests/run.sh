@@ -85,6 +85,35 @@ verifyTransfer "$testDir/large.txt" '32 MiB text file'
 verifyTransfer "$testDir/empty.txt" 'empty file'
 verifyTransfer "$testDir/small.txt" 'successive connections'
 
+# La consola debe recuperarse de órdenes inválidas y aceptar varios envíos en una sesión.
+printf 'Archivo con espacios en el nombre.\n' >"$testDir/with spaces.txt"
+{
+    printf '\nunknown\nenviar\nsalir extra\nenviar missing.txt\n'
+    head -c 5000 /dev/zero | tr '\000' 'x'
+    printf '\nenviar bad\000name\n  enviar small.txt  \r\nenviar %s\nsalir\n' \
+        "$testDir/with spaces.txt"
+    printf 'enviar missing-after-exit.txt\n'
+} >"$testDir/commands.txt"
+timeout 20 make --no-print-directory client ADDRESS=127.0.0.1 PORT="$serverPort" \
+    INPUT_DIR="$testDir" <"$testDir/commands.txt" >"$testDir/interactive.log" 2>&1
+[[ $(grep -c 'INFO: transfer confirmed' "$testDir/interactive.log") -eq 2 ]] ||
+    fail 'interactive client did not complete exactly two transfers'
+grep -q 'command too long or contains a null byte' "$testDir/interactive.log" ||
+    fail 'invalid command input was not rejected'
+grep -q 'session remains active' "$testDir/interactive.log" ||
+    fail 'missing file did not report a recoverable transfer error'
+cmp -- "$testDir/with spaces.txt" "$testDir/received.txt" ||
+    fail 'explicit path with spaces was not transferred'
+
+# EOF termina la sesión; una última línea sin salto también debe ejecutarse.
+printf 'enviar small.txt' >"$testDir/commands.txt"
+timeout 20 bin/client --interactive 127.0.0.1 "$serverPort" "$testDir" \
+    <"$testDir/commands.txt" >"$testDir/interactive.log" 2>&1
+verifyPreserved
+timeout 20 bin/client --interactive 127.0.0.1 "$serverPort" "$testDir" </dev/null
+expectFailure bin/client --interactive 192.0.2.1 "$serverPort" "$testDir"
+printf 'PASS: interactive commands, recovery, repeated sends, spaces, input limits and EOF\n'
+
 expectFailure bin/client 127.0.0.1 "$serverPort" "$testDir/missing.txt"
 expectFailure bin/client 127.0.0.1 "$serverPort" "$testDir"
 mkfifo "$testDir/inputFifo"
@@ -123,6 +152,32 @@ verifyTransfer "$testDir/small.txt" 'recovery after invalid transfers'
 stopServer
 expectFailure bin/client 127.0.0.1 "$serverPort" "$testDir/small.txt"
 printf 'PASS: connection refused and graceful server shutdown\n'
+
+# Un fallo de conexión no debe cerrar la consola antes de leer salir.
+printf 'enviar small.txt\nsalir\n' >"$testDir/commands.txt"
+timeout 20 make --no-print-directory client ADDRESS=127.0.0.1 PORT="$serverPort" \
+    INPUT_DIR="$testDir" <"$testDir/commands.txt" >"$testDir/interactive.log" 2>&1
+grep -q 'session remains active' "$testDir/interactive.log" ||
+    fail 'interactive connection failure did not report recovery'
+printf 'PASS: interactive session survives connection errors\n'
+
+# Ejecuta ambos objetivos Make, incluida la creación automática del directorio de salida.
+serverPort=$(bin/tcpPeer port)
+timeout --signal=TERM 30 make --no-print-directory server ADDRESS=127.0.0.1 \
+    PORT="$serverPort" OUTPUT_FILE="$testDir/make output/received.txt" \
+    >"$testDir/server.log" 2>&1 &
+serverPid=$!
+waitReady "$serverPid" "$testDir/server.log"
+printf 'enviar small.txt\nsalir\n' >"$testDir/commands.txt"
+timeout 20 make --no-print-directory client ADDRESS=127.0.0.1 PORT="$serverPort" \
+    INPUT_DIR="$testDir" <"$testDir/commands.txt" >"$testDir/interactive.log" 2>&1
+cmp -- "$testDir/small.txt" "$testDir/make output/received.txt" || fail 'Make transfer failed'
+# timeout retransmite la señal al grupo para detener también el servidor lanzado por Make.
+kill -TERM "$serverPid"
+wait "$serverPid" 2>/dev/null || true
+serverPid=""
+expectFailure bin/client 127.0.0.1 "$serverPort" "$testDir/small.txt"
+printf 'PASS: make server and make client launch working programs with configurable paths\n'
 
 startServer "$testDir/missingDirectory/received.txt"
 expectFailure bin/client 127.0.0.1 "$serverPort" "$testDir/small.txt"
