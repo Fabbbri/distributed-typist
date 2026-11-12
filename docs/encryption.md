@@ -32,12 +32,13 @@ puede producir un archivo válido.
 | Nonce o IV | 12 bytes, 96 bits | Valor aleatorio nuevo en cada cifrado |
 | Etiqueta GCM | 16 bytes, 128 bits | Verifica contenido y AAD al descifrar |
 | AAD | 16 bytes | Identificador `DTG1` y nonce del contenedor |
-| Bloque de lectura | 16 KiB | Acota la memoria utilizada por la aplicación |
+| Unidad de lectura y cifrado | 1 carácter de C, 1 byte | Una llamada de cifrado por carácter |
+| Bloque de transporte TCP | 16 KiB | Transmite el contenedor ya cifrado por bloques |
 | Límite del origen | 1 GiB | Límite operativo del proyecto, no del algoritmo AES |
 
 Los tamaños del formato están definidos en [crypto.h](../common/crypto.h); el bloque de
-lectura y el límite del origen se definen en [protocol.h](../common/protocol.h).
-El bloque de lectura de 16 KiB es una decisión de E/S y no el tamaño interno del bloque AES.
+transporte y el límite del origen se definen en [protocol.h](../common/protocol.h).
+El envío TCP por bloques se realiza después del cifrado carácter por carácter.
 
 ## 3. Clave: generación, carga y conservación
 
@@ -101,10 +102,12 @@ Al ejecutar `enviar example.txt`, el cliente procesa `input/example.txt` de esta
    `EVP_EncryptInit_ex()`, la clave y el nonce de 12 bytes.
 5. **Autenticar la cabecera.** Entrega sus 16 bytes como AAD mediante
    `EVP_EncryptUpdate()` con salida `NULL`; estos bytes siguen siendo visibles.
-6. **Cifrar el contenido.** `encryptContent()` lee hasta 16 KiB por iteración, llama
-   a `EVP_EncryptUpdate()` y escribe el resultado en el temporal. Mantiene el mismo
-   contexto GCM entre iteraciones.
-7. **Comprobar la longitud.** Rechaza lecturas cortas y un byte adicional al terminar,
+6. **Cifrar carácter por carácter.** `encryptContent()` usa `fgetc()` para obtener un
+   carácter, comprueba EOF y lo convierte a `unsigned char`. Llama a `EVP_EncryptUpdate()`
+   con exactamente un byte y escribe el carácter cifrado mediante `fputc()`. Mantiene el
+   mismo contexto GCM entre iteraciones. El buffering interno de stdio no agrupa las
+   llamadas de cifrado: cada actualización de contenido procesa un solo carácter de C.
+7. **Comprobar la longitud.** Rechaza EOF prematuro y un byte adicional al terminar,
    para detectar si el archivo se redujo o creció durante el cifrado.
 8. **Finalizar y obtener el tag.** Ejecuta `EVP_EncryptFinal_ex()` y obtiene los 16 bytes
    de etiqueta mediante `EVP_CTRL_GCM_GET_TAG`. GCM no añade relleno al contenido.
@@ -119,7 +122,7 @@ flowchart TD
     A[Orden enviar] --> B[Validar origen y cargar clave]
     B --> C[Generar nonce y preparar cabecera]
     C --> D[Inicializar AES-256-GCM y autenticar AAD]
-    D --> E[Leer y cifrar por bloques con el mismo contexto]
+    D --> E[Leer y cifrar un carácter de C por iteración]
     E --> F[Finalizar y guardar etiqueta GCM]
     F --> G[Enviar contenedor completo por TCP]
     G --> H[Servidor almacena y confirma recepción]
@@ -129,15 +132,21 @@ El archivo original permanece intacto. La memoria utilizada es acotada, pero el 
 cifrado necesita espacio en disco proporcional al tamaño del origen. Si el cifrado falla,
 se descarta ese temporal sin abrir la conexión. El temporal se cierra tras la transferencia.
 
-## 6. Interpretación de «carácter por carácter»
+## 6. Cifrado carácter por carácter en C
 
-La implementación cifra **todos los bytes del documento** de forma incremental. No cifra
-cada carácter como un mensaje AES-GCM independiente. Los caracteres UTF-8 pueden ocupar
-varios bytes; el programa no interpreta su codificación ni modifica saltos de línea o ceros.
+Cada iteración lee y cifra **un `char` de C, equivalente a un byte**. Se procesa el documento
+completo de esta manera, incluidos saltos de línea, bytes nulos y el valor `0xFF`. La lectura
+usa un `int` para distinguir EOF de cualquier valor de carácter válido antes de convertirlo.
 
-Los bloques de lectura son partes de un mismo mensaje autenticado: cambiar su tamaño
-no crea nuevos nonces ni etiquetas. Existe un único contexto, nonce y tag por archivo.
-Este es el comportamiento aplicado al seleccionar AES-256-GCM para el requisito del enunciado.
+En UTF-8 un carácter Unicode, como `á`, puede ocupar varios bytes; cada uno se cifra en
+su propia iteración y se recupera sin cambios. No se realiza decodificación Unicode ni se
+afirma que cada llamada corresponda a un carácter visual completo.
+
+Se conserva **un único contexto, nonce y tag por archivo**. Cifrar un carácter en cada
+actualización no significa reinicializar GCM ni generar una clave o etiqueta por carácter.
+La transmisión del contenedor resultante sigue realizándose por bloques de 16 KiB.
+La [API EVP permite procesar GCM de un byte en un byte](https://docs.openssl.org/3.0/man3/EVP_EncryptInit/).
+Esto aumenta el número de llamadas a OpenSSL respecto al cifrado por bloques y puede ser más lento.
 
 ## 7. Formato binario DTG1
 
@@ -208,6 +217,14 @@ La suite `make test` cubre recuperación de archivos vacíos, pequeños, de 32 M
 límites de bloque; nonces diferentes; claves inválidas; alteraciones de cabecera, nonce,
 cuerpo o tag; y archivos truncados. La autenticación de estos casos la prueba el auxiliar,
 sin añadir descifrado al servidor.
+
+[cryptoCharacterTest.c](../tests/cryptoCharacterTest.c) comprueba además que cada llamada
+de contenido a `EVP_EncryptUpdate()` reciba exactamente un byte y que haya una llamada
+por carácter leído. Usa la opción `--wrap` del enlazador GNU solo en ese ejecutable para
+observar las llamadas sin reemplazar el cifrado real de OpenSSL; las actualizaciones de AAD
+no se cuentan como caracteres del contenido. La entrada incluye ceros y `0xFF`, casos vacíos y
+longitudes que superan el tamaño del bloque de transporte. Esta prueba falla si el cifrado agrupa
+varios caracteres en una sola actualización EVP.
 
 ## 10. Límites de esta etapa
 

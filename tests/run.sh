@@ -20,6 +20,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Verifica la granularidad del contenido antes de iniciar las pruebas de transporte.
+bin/cryptoCharacterTest
+
 # Cada ejecución utiliza su propia clave; no se añaden secretos ni claves fijas al repositorio.
 export KEY_FILE="$testDir/client.key"
 export TYPIST_KEY_FILE="$KEY_FILE"
@@ -94,6 +97,8 @@ startServer "$testDir/received.txt"
 verifyTransfer "$testDir/small.txt" 'small text file'
 verifyTransfer "$testDir/large.txt" '32 MiB text file'
 verifyTransfer "$testDir/empty.txt" 'empty file'
+printf 'A\000\377áéíóú ñ 😀\r\n' >"$testDir/characters.bin"
+verifyTransfer "$testDir/characters.bin" 'character input with UTF-8, null, 0xFF and CRLF'
 verifyTransfer "$testDir/small.txt" 'successive connections'
 cp "$testDir/received.txt" "$testDir/previous.enc"
 

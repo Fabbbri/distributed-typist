@@ -1,9 +1,9 @@
 # distributed-typist
 
 Proyecto 2 de Principios de Sistemas Operativos (CE4303), desarrollado en C para Linux.
-Actualmente permite enviar archivos por TCP desde un cliente de consola, cifrándolos con
-AES-256-GCM y OpenSSL. El servidor los almacena cifrados; el descifrado y el procesamiento
-distribuido siguen pendientes. Esta versión funciona únicamente en loopback para pruebas locales.
+Actualmente permite enviar archivos por TCP desde un cliente de consola, cifrándolos
+carácter por carácter de C con AES-256-GCM y OpenSSL. El servidor los almacena cifrados;
+el descifrado y el procesamiento distribuido siguen pendientes. Las pruebas se limitan a loopback.
 
 ## Preparación
 

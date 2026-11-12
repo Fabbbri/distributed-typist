@@ -75,7 +75,7 @@ cleanup:
 }
 
 /**
- * @brief Cifra el contenido esperado y rechaza cambios de longitud del origen.
+ * @brief Lee y cifra cada carácter de C por separado, validando la longitud del origen.
  * @param context Contexto GCM inicializado con clave, nonce y AAD, no NULL.
  * @param input Archivo de origen abierto, no NULL.
  * @param output Archivo de destino abierto, no NULL.
@@ -84,33 +84,36 @@ cleanup:
  */
 static int encryptContent(EVP_CIPHER_CTX *context, FILE *input, FILE *output,
                           uint64_t fileSize) {
-    unsigned char plainBlock[TRANSFER_BLOCK_SIZE];
-    unsigned char cipherBlock[TRANSFER_BLOCK_SIZE + EVP_MAX_BLOCK_LENGTH];
+    unsigned char plainCharacter = 0;
+    unsigned char cipherCharacter[1 + EVP_MAX_BLOCK_LENGTH];
     uint64_t remainingBytes = fileSize;
+    int nextCharacter = EOF;
     int result = -1;
 
-    // Mantiene un único contexto GCM entre bloques; cada byte pertenece al mismo mensaje.
+    // Cada fgetc y cada actualización GCM procesan un char de C, conservando el contexto.
     while (remainingBytes > 0) {
-        size_t blockSize = remainingBytes < sizeof(plainBlock) ?
-            (size_t)remainingBytes : sizeof(plainBlock);
         int cipherLength = 0;
 
+        // fgetc devuelve int: comprueba EOF antes de convertir para no perder el byte 0xFF.
         errno = 0;
-        if (fread(plainBlock, 1, blockSize, input) != blockSize) {
+        nextCharacter = fgetc(input);
+        if (nextCharacter == EOF) {
             errno = errno != 0 ? errno : EIO;
             goto cleanup;
         }
-        if (EVP_EncryptUpdate(context, cipherBlock, &cipherLength,
-                              plainBlock, (int)blockSize) != 1 ||
-            cipherLength != (int)blockSize) {
+        plainCharacter = (unsigned char)nextCharacter;
+        if (EVP_EncryptUpdate(context, cipherCharacter, &cipherLength,
+                              &plainCharacter, sizeof(plainCharacter)) != 1 ||
+            cipherLength != sizeof(plainCharacter)) {
             errno = EIO;
             goto cleanup;
         }
-        if (fwrite(cipherBlock, 1, (size_t)cipherLength, output) != (size_t)cipherLength) {
+        // Escribe el carácter cifrado; stdio conserva su buffering de E/S habitual.
+        if (fputc(cipherCharacter[0], output) == EOF) {
             errno = errno != 0 ? errno : EIO;
             goto cleanup;
         }
-        remainingBytes -= blockSize;
+        remainingBytes--;
     }
     // No finaliza ni emite la etiqueta si el origen creció respecto al tamaño anunciado.
     errno = 0;
@@ -121,7 +124,8 @@ static int encryptContent(EVP_CIPHER_CTX *context, FILE *input, FILE *output,
     result = 0;
 
 cleanup:
-    OPENSSL_cleanse(plainBlock, sizeof(plainBlock));
+    OPENSSL_cleanse(&plainCharacter, sizeof(plainCharacter));
+    OPENSSL_cleanse(&nextCharacter, sizeof(nextCharacter));
     return result;
 }
 

@@ -40,11 +40,16 @@ bin/cryptoCheck: tests/cryptoCheck.c common/crypto.c common/crypto.h common/prot
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/cryptoCheck.c common/crypto.c \
 		$(LDFLAGS) $(LDLIBS) -lcrypto -o $@
 
+bin/cryptoCharacterTest: tests/cryptoCharacterTest.c common/crypto.c common/crypto.h \
+                       common/protocol.h | bin
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/cryptoCharacterTest.c common/crypto.c \
+		$(LDFLAGS) -Wl,--wrap=EVP_EncryptUpdate $(LDLIBS) -lcrypto -o $@
+
 bin:
 	mkdir -p $@
 
-test: all bin/tcpPeer bin/cryptoCheck
+test: all bin/tcpPeer bin/cryptoCheck bin/cryptoCharacterTest
 	bash tests/run.sh
 
 clean:
-	rm -f bin/client bin/server bin/tcpPeer bin/cryptoCheck
+	rm -f bin/client bin/server bin/tcpPeer bin/cryptoCheck bin/cryptoCharacterTest

@@ -21,13 +21,14 @@
 int loadEncryptionKey(const char *keyPath, unsigned char *key);
 
 /**
- * @brief Cifra un archivo mediante AES-256-GCM incremental con nonce aleatorio y AAD.
+ * @brief Cifra un archivo carácter por carácter de C mediante AES-256-GCM, nonce y AAD.
  * @param input Origen regular al inicio, no NULL; no se cierra ni debe cambiar durante el cifrado.
  * @param output Destino vacío, no NULL; recibe DTG1, nonce, contenido cifrado y etiqueta GCM.
  * @param fileSize Tamaño esperado del origen, hasta MAX_FILE_SIZE.
  * @param key Clave de ENCRYPTION_KEY_SIZE bytes, no NULL; conserva su propiedad el llamador.
  * @return 0 si completa y vacía la salida, -1 con errno; la salida parcial debe descartarse.
  * La memoria utilizada es acotada; ningún texto claro se escribe en el archivo de salida.
+ * Cada actualización de contenido cifra un char (un byte), manteniendo un único contexto GCM.
  */
 int encryptFile(FILE *input, FILE *output, uint64_t fileSize, const unsigned char *key);
 
