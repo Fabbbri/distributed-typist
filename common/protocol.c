@@ -1,0 +1,242 @@
+#include "protocol.h"
+
+#include <arpa/inet.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+
+int parseEndpoint(const char *address, const char *port, struct sockaddr_in *endpoint) {
+    unsigned long portNumber = 0;
+
+    if (address == NULL || port == NULL || endpoint == NULL || *port == '\0') {
+        errno = EINVAL;
+        return -1;
+    }
+    for (const char *digit = port; *digit != '\0'; digit++) {
+        if (*digit < '0' || *digit > '9') {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+    errno = 0;
+    portNumber = strtoul(port, NULL, 10);
+    if (errno != 0 || portNumber == 0 || portNumber > UINT16_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    memset(endpoint, 0, sizeof(*endpoint));
+    endpoint->sin_family = AF_INET;
+    endpoint->sin_port = htons((uint16_t)portNumber);
+    if (inet_pton(AF_INET, address, &endpoint->sin_addr) != 1 ||
+        (ntohl(endpoint->sin_addr.s_addr) >> 24) != 127) {
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
+
+int configureSocket(int socketFd) {
+    const struct timeval timeout = {SOCKET_TIMEOUT_SECONDS, 0};
+
+    if (setsockopt(socketFd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == -1 ||
+        setsockopt(socketFd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) == -1) {
+        return -1;
+    }
+    return 0;
+}
+
+int sendAll(int socketFd, const void *buffer, size_t length) {
+    const unsigned char *bytes = buffer;
+    size_t sentBytes = 0;
+
+    if ((buffer == NULL && length != 0) || length > TRANSFER_BLOCK_SIZE) {
+        errno = EINVAL;
+        return -1;
+    }
+    while (sentBytes < length) {
+        ssize_t result = send(socketFd, bytes + sentBytes, length - sentBytes, MSG_NOSIGNAL);
+
+        if (result == -1 && errno == EINTR) {
+            continue;
+        }
+        if (result <= 0) {
+            if (result == 0) {
+                errno = EPIPE;
+            }
+            return -1;
+        }
+        sentBytes += (size_t)result;
+    }
+    return 0;
+}
+
+int receiveAll(int socketFd, void *buffer, size_t length) {
+    unsigned char *bytes = buffer;
+    size_t receivedBytes = 0;
+
+    if ((buffer == NULL && length != 0) || length > TRANSFER_BLOCK_SIZE) {
+        errno = EINVAL;
+        return -1;
+    }
+    while (receivedBytes < length) {
+        ssize_t result = recv(socketFd, bytes + receivedBytes, length - receivedBytes, 0);
+
+        if (result == -1 && errno == EINTR) {
+            continue;
+        }
+        if (result <= 0) {
+            if (result == 0) {
+                errno = ECONNRESET;
+            }
+            return -1;
+        }
+        receivedBytes += (size_t)result;
+    }
+    return 0;
+}
+
+int sendHeader(int socketFd, uint64_t fileSize) {
+    unsigned char header[TRANSFER_HEADER_SIZE] = {'D', 'T', 'P', '1'};
+
+    if (fileSize > MAX_FILE_SIZE) {
+        errno = EFBIG;
+        return -1;
+    }
+    for (size_t index = 0; index < sizeof(fileSize); index++) {
+        header[sizeof(header) - 1 - index] = (unsigned char)(fileSize >> (index * 8));
+    }
+    return sendAll(socketFd, header, sizeof(header));
+}
+
+int receiveHeader(int socketFd, uint64_t *fileSize) {
+    unsigned char header[TRANSFER_HEADER_SIZE];
+    uint64_t decodedSize = 0;
+
+    if (fileSize == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (receiveAll(socketFd, header, sizeof(header)) == -1) {
+        return -1;
+    }
+    if (memcmp(header, "DTP1", 4) != 0) {
+        errno = EPROTO;
+        return -1;
+    }
+    for (size_t index = 4; index < sizeof(header); index++) {
+        decodedSize = (decodedSize << 8) | header[index];
+    }
+    if (decodedSize > MAX_FILE_SIZE) {
+        errno = EFBIG;
+        return -1;
+    }
+    *fileSize = decodedSize;
+    return 0;
+}
+
+int sendStatus(int socketFd, TransferStatus status) {
+    unsigned char statusByte = (unsigned char)status;
+
+    if (status < TRANSFER_SUCCESS || status > TRANSFER_INCOMPLETE) {
+        errno = EINVAL;
+        return -1;
+    }
+    return sendAll(socketFd, &statusByte, sizeof(statusByte));
+}
+
+int receiveStatus(int socketFd, TransferStatus *status) {
+    unsigned char statusByte = 0;
+
+    if (status == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (receiveAll(socketFd, &statusByte, sizeof(statusByte)) == -1) {
+        return -1;
+    }
+    if (statusByte > TRANSFER_INCOMPLETE) {
+        errno = EPROTO;
+        return -1;
+    }
+    *status = (TransferStatus)statusByte;
+    return 0;
+}
+
+int sendFile(int socketFd, FILE *input, uint64_t fileSize) {
+    unsigned char buffer[TRANSFER_BLOCK_SIZE];
+    uint64_t remainingBytes = fileSize;
+
+    if (input == NULL || fileSize > MAX_FILE_SIZE) {
+        errno = EINVAL;
+        return -1;
+    }
+    while (remainingBytes > 0) {
+        size_t blockSize = remainingBytes < sizeof(buffer) ?
+            (size_t)remainingBytes : sizeof(buffer);
+
+        errno = 0;
+        if (fread(buffer, 1, blockSize, input) != blockSize) {
+            if (errno == 0) {
+                errno = EIO;
+            }
+            return -1;
+        }
+        if (sendAll(socketFd, buffer, blockSize) == -1) {
+            return -1;
+        }
+        remainingBytes -= blockSize;
+    }
+    errno = 0;
+    if (fgetc(input) != EOF || ferror(input)) {
+        if (errno == 0) {
+            errno = EIO;
+        }
+        return -1;
+    }
+    return 0;
+}
+
+int receiveFile(int socketFd, FILE *output, uint64_t fileSize) {
+    unsigned char buffer[TRANSFER_BLOCK_SIZE];
+    uint64_t remainingBytes = fileSize;
+
+    if (output == NULL || fileSize > MAX_FILE_SIZE) {
+        errno = EINVAL;
+        return -1;
+    }
+    while (remainingBytes > 0) {
+        size_t blockSize = remainingBytes < sizeof(buffer) ?
+            (size_t)remainingBytes : sizeof(buffer);
+
+        if (receiveAll(socketFd, buffer, blockSize) == -1) {
+            return -1;
+        }
+        errno = 0;
+        if (fwrite(buffer, 1, blockSize, output) != blockSize) {
+            if (errno == 0) {
+                errno = EIO;
+            }
+            return -1;
+        }
+        remainingBytes -= blockSize;
+    }
+    return 0;
+}
+
+int expectStreamEnd(int socketFd) {
+    unsigned char extraByte = 0;
+    ssize_t result = 0;
+
+    do {
+        result = recv(socketFd, &extraByte, sizeof(extraByte), 0);
+    } while (result == -1 && errno == EINTR);
+    if (result == 0) {
+        return 0;
+    }
+    if (result > 0) {
+        errno = EPROTO;
+    }
+    return -1;
+}
