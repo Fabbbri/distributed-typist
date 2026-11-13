@@ -124,6 +124,14 @@ static int exerciseServer(int socketFd, const char *mode) {
             return -1;
         }
         expectedStatus = TRANSFER_SUCCESS;
+    } else if (strcmp(mode, "badGcm") == 0) {
+        // El transporte es completo, pero el procesador distribuido debe rechazar el contenedor.
+        if (sendHeader(socketFd, ENCRYPTION_OVERHEAD) == -1 ||
+            expectStatus(socketFd, TRANSFER_READY) == -1 ||
+            sendAll(socketFd, incompleteBody, ENCRYPTION_OVERHEAD) == -1) {
+            return -1;
+        }
+        expectedStatus = TRANSFER_IO_ERROR;
     } else if (strcmp(mode, "truncated") == 0 || strcmp(mode, "reset") == 0 ||
                strcmp(mode, "extra") == 0 || strcmp(mode, "stall") == 0) {
         uint64_t declaredSize = strcmp(mode, "extra") == 0 ? ENCRYPTION_OVERHEAD : 64;

@@ -66,11 +66,14 @@ static FILE *openStagingFile(const char *outputPath, char *stagingPath) {
 }
 
 /**
- * @brief Recibe una transferencia y confirma únicamente tras cerrar y publicar el archivo.
+ * @brief Recibe, publica y procesa opcionalmente antes de confirmar la transferencia.
  * @param socketFd Socket conectado, cuya propiedad conserva el llamador.
  * @param outputPath Ruta final previamente validada.
+ * @param processor Procesador opcional del archivo cifrado publicado.
+ * @param context Contexto prestado del procesador.
  */
-static void handleTransfer(int socketFd, const char *outputPath) {
+static void handleTransfer(int socketFd, const char *outputPath,
+                           FileProcessor processor, void *context) {
     uint64_t fileSize = 0;
     char stagingPath[PATH_MAX] = "";
     FILE *output = NULL;
@@ -127,8 +130,13 @@ static void handleTransfer(int socketFd, const char *outputPath) {
     }
     // El temporal ya es el archivo final: deja de ser un recurso pendiente de eliminación.
     stagingPath[0] = '\0';
-    status = TRANSFER_SUCCESS;
     printf("INFO: stored encrypted container (%" PRIu64 " bytes) in %s\n", fileSize, outputPath);
+    // El modo distribuido solo confirma éxito cuando los tres rangos completan su trabajo.
+    if (processor != NULL && processor(outputPath, context) == -1) {
+        perror("ERROR: process received file");
+        goto cleanup;
+    }
+    status = TRANSFER_SUCCESS;
 
 cleanup:
     // Un fallo previo a rename elimina el temporal y conserva la salida anterior.
@@ -148,9 +156,12 @@ cleanup:
  * @brief Espera conexiones y conserva el servicio después de transferencias fallidas.
  * @param listenerFd Socket de escucha; no se cierra aquí.
  * @param outputPath Ruta final previamente validada.
+ * @param processor Procesador opcional del archivo recibido.
+ * @param context Contexto prestado del procesador.
  * @return 0 al solicitar parada, -1 si falla la escucha.
  */
-static int acceptConnections(int listenerFd, const char *outputPath) {
+static int acceptConnections(int listenerFd, const char *outputPath,
+                              FileProcessor processor, void *context) {
     struct pollfd listenerPoll = {listenerFd, POLLIN, 0};
 
     // La espera periódica permite revisar la solicitud de parada sin una espera activa.
@@ -179,7 +190,7 @@ static int acceptConnections(int listenerFd, const char *outputPath) {
             return -1;
         }
         // Cada cliente se atiende y cierra antes del siguiente; un fallo no detiene la escucha.
-        handleTransfer(connectionFd, outputPath);
+        handleTransfer(connectionFd, outputPath, processor, context);
         if (close(connectionFd) == -1) {
             perror("WARN: close client connection");
         }
@@ -187,7 +198,8 @@ static int acceptConnections(int listenerFd, const char *outputPath) {
     return 0;
 }
 
-int runServer(const char *address, const char *port, const char *outputPath) {
+int runServerWithProcessor(const char *address, const char *port, const char *outputPath,
+                           FileProcessor processor, void *context) {
     struct sockaddr_in endpoint;
     struct sigaction stopAction = {0};
     const int reuseAddress = 1;
@@ -220,12 +232,13 @@ int runServer(const char *address, const char *port, const char *outputPath) {
         goto cleanup;
     }
     // Publica el aviso de disponibilidad incluso con stdout redirigido antes de atender.
-    printf("INFO: listening on %s:%s (local encrypted file storage)\n", address, port);
+    printf("INFO: listening on %s:%s (%s)\n", address, port,
+           processor != NULL ? "local TCP + three MPI workers" : "local encrypted file storage");
     if (fflush(stdout) == EOF) {
         perror("ERROR: flush startup message");
         goto cleanup;
     }
-    result = acceptConnections(listenerFd, outputPath);
+    result = acceptConnections(listenerFd, outputPath, processor, context);
 
 cleanup:
     // La conexión de cada cliente ya se cierra en el bucle; aquí se libera la escucha.
@@ -236,17 +249,7 @@ cleanup:
     return result;
 }
 
-/**
- * @brief Inicia el servidor secuencial de almacenamiento de archivos cifrados en loopback.
- * @param argumentCount Cantidad de argumentos, incluido el ejecutable.
- * @param arguments Ejecutable, dirección, puerto y ruta de destino.
- * @return EXIT_SUCCESS al detenerse normalmente, EXIT_FAILURE ante errores de servicio.
- */
-int main(int argumentCount, char *arguments[]) {
-    if (argumentCount != 4) {
-        fprintf(stderr, "Usage: %s <loopback-ipv4> <port> <output-file>\n", arguments[0]);
-        return EXIT_FAILURE;
-    }
-    return runServer(arguments[1], arguments[2], arguments[3]) == 0 ?
-        EXIT_SUCCESS : EXIT_FAILURE;
+int runServer(const char *address, const char *port, const char *outputPath) {
+    // Conserva el servicio de almacenamiento y sus contratos para las pruebas existentes.
+    return runServerWithProcessor(address, port, outputPath, NULL, NULL);
 }
