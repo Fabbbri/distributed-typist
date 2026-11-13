@@ -1,9 +1,10 @@
 # Cifrado AES-256-GCM del cliente
 
 Este documento describe el cifrado implementado en [crypto.c](../common/crypto.c),
-su integración con el cliente y el formato que recibe el servidor. Corresponde al estado
-actual del proyecto: **el cliente cifra; el servidor almacena sin descifrar ni validar la
-etiqueta de autenticación**.
+su integración con el cliente y el formato que recibe el servidor. **`make server` solo
+almacena; `make cluster-server` autentica y procesa con tres rangos OpenMPI**. Las secciones
+sobre recepción sin descifrado describen el modo de almacenamiento. El modo distribuido
+se detalla en la [guía de pruebas MPI](mpi-testing.md).
 
 ## 1. Algoritmo utilizado
 
@@ -178,10 +179,13 @@ El servidor recibe la longitud anunciada, exige el fin del envío, cierra su tem
 publica el resultado mediante `rename()`. Por defecto lo guarda en `output/cifrado.bin`;
 cada transferencia correcta reemplaza la salida anterior.
 
-**El servidor no dispone de la clave, no descifra el archivo y no verifica su etiqueta.**
+**En el modo `make server`, el servidor no dispone de la clave, no descifra el archivo
+y no verifica su etiqueta.**
 Tampoco inspecciona el formato interno DTG1: almacena el cuerpo como bytes opacos.
 `INFO: transfer confirmed` significa que recibió la confirmación de almacenamiento,
-no que haya ocurrido un descifrado o una autenticación GCM.
+no que haya ocurrido un descifrado o una autenticación GCM en ese modo. Con
+`make cluster-server`, la misma confirmación requiere además autenticación, procesamiento
+de los tres rangos y publicación de los conteos y del archivo descifrado.
 
 El auxiliar [cryptoCheck.c](../tests/cryptoCheck.c), exclusivo de pruebas, sí realiza la
 recuperación autenticada. Usa `EVP_DecryptUpdate()`, configura el tag esperado mediante
@@ -236,7 +240,10 @@ sí solo el protocolo en un canal de red completamente protegido.
 El origen debe permanecer estable. Se detectan cambios de longitud, pero no se crea una
 instantánea ni se detectan necesariamente cambios que conserven el mismo tamaño.
 
-OpenMPI y el descifrado distribuido siguen pendientes. El tag actual autentica el archivo
-completo: los fragmentos no son contenedores GCM independientes. La integración futura
-deberá conservar esa verificación global o definir explícitamente un formato autenticado
-por fragmentos, junto con la gestión de claves entre nodos.
+La integración OpenMPI conserva DTG1: el coordinador verifica y descifra el contenedor
+completo, y prepara tres fragmentos cifrados con nonce y tag propios. Cada rango descifra
+y cuenta su parte, y los resultados MPI regresan cifrados. Esto añade una preparación
+serial; no equivale a dividir directamente el binario DTG1 ni elimina la necesidad de
+proteger las cabeceras y estados del protocolo. La misma clave privada se provisiona
+localmente en todos los nodos; no se transmite por MPI. Véase la
+[guía de pruebas MPI](mpi-testing.md) para límites, conteo y ejecución.
