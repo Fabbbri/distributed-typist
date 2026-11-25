@@ -1,6 +1,6 @@
 # ============================================================
 # Proyecto 2 - Principios de Sistemas Operativos
-# C / Linux / OpenMPI / modulo de kernel / ESP32
+# C / Linux / OpenMPI / modulo de kernel / Pico H RP2040
 # ============================================================
 
 # Compilacion en C y bibliotecas generadas
@@ -35,7 +35,7 @@ modules.order
 .*.cmd
 *.order
 
-# Firmware del ESP32: compilacion y flasheo
+# Firmware: salidas Pico SDK y patrones historicos del entorno ESP32
 **/build/
 **/.pio/
 **/sdkconfig.old

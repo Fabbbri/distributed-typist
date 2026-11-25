@@ -2,6 +2,15 @@ CC = cc
 MPICC ?= mpicc
 MPIEXEC ?= mpirun
 MPI_FLAGS ?= --oversubscribe --tag-output
+AR ?= ar
+CMAKE ?= cmake
+KERNEL_BUILD ?= /lib/modules/$(shell uname -r)/build
+PICO_SDK_PATH ?=
+USB_VID ?=
+USB_PID ?=
+USB_POWER_MA ?=
+FIRMWARE_BUILD ?= build/pico
+FIRMWARE_CMAKE_FLAGS ?=
 CPPFLAGS += -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64 -Icommon
 CFLAGS ?= -std=c11 -O2
 CFLAGS += -Wall -Wextra -Wpedantic
@@ -14,7 +23,8 @@ KEY_FILE ?= keys/client.key
 PLAIN_FILE ?= output/descifrado.txt
 COUNTS_FILE ?= output/conteos.txt
 
-.PHONY: all client server cluster-server keygen test test-mpi test-cluster clean
+.PHONY: all client server cluster-server keygen test test-mpi test-cluster clean \
+        hardware-library driver firmware test-hardware clean-driver
 
 all: bin/client bin/server
 
@@ -67,6 +77,45 @@ bin/cryptoCharacterTest: tests/cryptoCharacterTest.c common/crypto.c common/cryp
 bin/mpiSmoke: tests/mpiSmoke.c | bin
 	$(MPICC) $(CPPFLAGS) $(CFLAGS) $< $(LDFLAGS) $(LDLIBS) -o $@
 
+build/armDevice.o: library/armDevice.c library/armDevice.h include/typistIoctl.h \
+                   include/typistUsbProtocol.h | build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Iinclude -Ilibrary -c library/armDevice.c -o $@
+
+build/libtypist.a: build/armDevice.o
+	$(AR) rcs $@ $<
+
+bin/armStatus: tools/armStatus.c library/armDevice.h build/libtypist.a | bin
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Ilibrary tools/armStatus.c build/libtypist.a \
+		$(LDFLAGS) $(LDLIBS) -o $@
+
+bin/armDeviceTest: tests/armDeviceTest.c firmware/pico/statusProtocol.c \
+                   firmware/pico/statusProtocol.h include/typistIoctl.h \
+                   include/typistUsbProtocol.h library/armDevice.h build/libtypist.a | bin
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Iinclude -Ilibrary -Ifirmware/pico tests/armDeviceTest.c \
+		firmware/pico/statusProtocol.c build/libtypist.a \
+		$(LDFLAGS) -Wl,--wrap=ioctl $(LDLIBS) -o $@
+
+hardware-library: build/libtypist.a bin/armStatus
+
+driver:
+	$(MAKE) -C "$(KERNEL_BUILD)" M="$(CURDIR)/driver" modules
+
+firmware:
+	$(CMAKE) -S firmware/pico -B "$(FIRMWARE_BUILD)" -DPICO_BOARD=pico -DPICO_PLATFORM=rp2040 \
+		-DPICO_SDK_PATH="$(PICO_SDK_PATH)" -DTYPIST_USB_VID="$(USB_VID)" \
+		-DTYPIST_USB_PID="$(USB_PID)" -DTYPIST_USB_POWER_MA="$(USB_POWER_MA)" \
+		$(FIRMWARE_CMAKE_FLAGS)
+	$(CMAKE) --build "$(FIRMWARE_BUILD)"
+
+test-hardware: bin/armDeviceTest
+	./bin/armDeviceTest
+
+clean-driver:
+	$(MAKE) -C "$(KERNEL_BUILD)" M="$(CURDIR)/driver" clean
+
+build:
+	mkdir -p $@
+
 bin:
 	mkdir -p $@
 
@@ -83,3 +132,4 @@ clean:
 	rm -f bin/client bin/server bin/tcpPeer bin/cryptoCheck bin/cryptoCharacterTest
 	rm -f bin/mpiSmoke
 	rm -f bin/clusterServer
+	rm -f bin/armStatus bin/armDeviceTest build/armDevice.o build/libtypist.a
