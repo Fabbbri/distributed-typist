@@ -92,7 +92,51 @@ confirma éxito cuando termina el procesamiento. Se generan:
 Cada envío reemplaza las salidas. `make server` conserva el modo de solo almacenamiento;
 utilizar uno de los dos servidores a la vez si comparten puerto. La prueba automática
 integral es `make test-cluster`; `make test-mpi` sigue siendo un diagnóstico independiente.
-No es necesario conectar el ESP32 para estas pruebas.
+No es necesario conectar la Raspberry Pi Pico H ni el brazo para estas pruebas;
+la integración física y la pantalla de selección todavía están pendientes.
 
 Detalles, criterios de conteo y límites: [guía de pruebas MPI](docs/mpi-testing.md).
 Detalles del algoritmo: [documentación del cifrado](docs/encryption.md).
+
+## Hardware y componentes pendientes
+
+El diseño actual utiliza una **Raspberry Pi Pico H original, basada en RP2040**,
+un brazo de acrílico de MicroJPM y tres servomotores: **dos SG92R y un MG90S**.
+La Pico H ejecutará firmware en C con el Pico SDK; Linux y OpenMPI se ejecutan en
+las computadoras. La placa seleccionada no tiene Wi-Fi ni Bluetooth integrado.
+
+La conexión prevista es computadora Linux → **USB** → Pico H, y Pico H → **GPIO de
+control** → servos del brazo. El brazo presionará físicamente las teclas de un
+teclado conectado a la misma computadora que ejecuta el servidor:
+
+| Tecla | Acción prevista en la pantalla de selección |
+| --- | --- |
+| J | Retroceder en la selección de caracteres |
+| K | Confirmar el carácter seleccionado |
+| L | Avanzar en la selección de caracteres |
+
+La pantalla de selección y el control físico **todavía están pendientes**. Ya existe
+una primera base de comunicación USB: módulo propio del kernel de Linux en C,
+biblioteca estática `.a` y firmware para la Pico H que responde `UNCONFIGURED`.
+Solo consulta estado; aún no se ha validado con una placa real ni se integra con la
+salida del servidor. El módulo y la biblioteca son componentes distintos del firmware.
+
+Se eligió una interfaz USB de fabricante para la consulta inicial. Quedan por definir
+los identificadores y el presupuesto USB, las órdenes de movimiento, la asignación y
+calibración de servos por articulación, los GPIO, la alimentación, el cableado y la
+señal de finalización. La sustitución del ESP32 de la propuesta inicial
+es una decisión de hardware; la implementación distribuida parcial y sus dependencias
+permanecen vigentes.
+
+Arquitectura prevista, herramientas y decisiones pendientes: [documentación de hardware](docs/hardware.md).
+
+Para compilar la biblioteca y ejecutar sus pruebas nativas, sin conectar la placa:
+
+```sh
+make hardware-library
+make test-hardware
+```
+
+`make driver` compila `driver/typist_usb.ko` con los encabezados del kernel. No lo carga.
+`make firmware` requiere Pico SDK y los parámetros USB explícitos. Compilación del
+firmware y comprobación física pendiente: [primera versión USB](docs/usb-bringup.md).

@@ -6,6 +6,13 @@ Esta prueba utiliza el cliente real, TCP y tres procesos MPI en Linux, sin máqu
 virtuales ni el hardware del dispositivo. El rango 0 atiende al cliente y procesa una
 parte; los rangos 1 y 2 procesan las otras dos. Son tres trabajadores efectivos.
 
+El hardware previsto es una Raspberry Pi Pico H original (RP2040), conectada por USB
+a la computadora del servidor, y un brazo que pulsará J/K/L en el teclado de ese mismo
+equipo. El driver propio, la biblioteca `.a` y el firmware tienen una base inicial de
+consulta de estado USB, todavía sin validación física ni integración con el servidor.
+La pantalla de selección sigue pendiente. Estas pruebas no validan pulsaciones físicas ni selección
+de caracteres; el detalle del diseño está en [hardware.md](hardware.md).
+
 En Debian/Ubuntu:
 
 ```sh
@@ -193,8 +200,14 @@ contra repetición de mensajes. Falta completar la protección del protocolo par
 satisfacer plenamente el cifrado de la información de red. El arranque por SSH no
 cifra automáticamente el tráfico de datos MPI.
 
-También quedan la validación en tres equipos, la integración con biblioteca `.a`,
-driver propio y ESP32, y la medición del reparto de carga y rendimiento.
+También quedan la validación en tres equipos y la medición del reparto de carga y
+rendimiento. La integración física requiere validar y ampliar la base USB del driver
+propio, la biblioteca `.a` y el firmware en C con Pico SDK para la Pico H, y desarrollar
+la pantalla de selección controlada por las pulsaciones físicas J/K/L. La consulta
+inicial de estado se documenta en [usb-bringup.md](usb-bringup.md). El tramo
+computadora–Pico H será USB; el tramo Pico H–servos utilizará señales de control por
+GPIO. La asignación de los dos SG92R y el MG90S, los pines, la calibración, la alimentación
+y el cableado están pendientes de definir.
 
 ## Referencias
 
