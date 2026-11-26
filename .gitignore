@@ -18,7 +18,6 @@
 *.gcov
 *.profraw
 *.profdata
-/build/
 /bin/
 /dist/
 
@@ -36,7 +35,6 @@ modules.order
 *.order
 
 # Firmware: salidas Pico SDK y patrones historicos del entorno ESP32
-**/build/
 **/.pio/
 **/sdkconfig.old
 *.bin
@@ -75,6 +73,9 @@ core.*
 .env.*
 !.env.example
 
+
+/build/
+**/build/
 # IMPORTANTE: conservar en Git el codigo fuente, encabezados,
 # Makefile(s), documentacion, ejemplos y archivos de configuracion
 # necesarios para compilar y ejecutar el proyecto.
