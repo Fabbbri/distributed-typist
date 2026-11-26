@@ -4,7 +4,8 @@ Proyecto 2 de Principios de Sistemas Operativos (CE4303), desarrollado en C para
 Permite enviar archivos por TCP desde un cliente de consola, cifrándolos carácter por
 carácter de C con AES-256-GCM y OpenSSL. El servidor puede almacenar solamente o ejecutar
 el descifrado y conteo de palabras con tres procesos OpenMPI. La integración se ha probado
-en una computadora con TCP en loopback; la validación en tres equipos físicos está pendiente.
+localmente y entre dos y tres computadoras físicas, con tres procesos MPI y el cliente
+TCP en loopback en el coordinador. La integración con el hardware sigue pendiente.
 
 ## Preparación
 
@@ -96,6 +97,8 @@ No es necesario conectar la Raspberry Pi Pico H ni el brazo para estas pruebas;
 la integración física y la pantalla de selección todavía están pendientes.
 
 Detalles, criterios de conteo y límites: [guía de pruebas MPI](docs/mpi-testing.md).
+Preparación y comandos para dos equipos: [prueba entre computadoras](docs/mpi-two-hosts.md).
+Configuración validada con un rango por equipo: [prueba en tres computadoras](docs/mpi-three-hosts.md).
 Detalles del algoritmo: [documentación del cifrado](docs/encryption.md).
 
 ## Hardware y componentes pendientes

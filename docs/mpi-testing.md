@@ -141,8 +141,12 @@ Ejecutar como usuario normal.
 
 ## 4. Ejecución en tres computadoras Linux
 
-La integración solo se ha verificado en una computadora. Para la topología de la
-propuesta se necesitan tres equipos físicos y validar el flujo allí.
+La integración se ha verificado localmente, entre dos computadoras y con un rango
+por cada una de tres computadoras físicas, usando el cliente y el servidor reales.
+La [guía para dos equipos](mpi-two-hosts.md) recoge la preparación de OpenMPI compatible.
+La [guía para tres equipos](mpi-three-hosts.md) documenta la configuración validada
+con usuarios y rutas diferentes. Los ejemplos generales siguientes suponen una
+instalación uniforme; para repetir la prueba realizada, usar la guía de tres equipos.
 
 1. Conectar los equipos a una red donde puedan comunicarse entre sí.
 2. Instalar OpenMPI compatible, preferiblemente de la misma versión y en la misma ruta,
@@ -200,8 +204,8 @@ contra repetición de mensajes. Falta completar la protección del protocolo par
 satisfacer plenamente el cifrado de la información de red. El arranque por SSH no
 cifra automáticamente el tráfico de datos MPI.
 
-También quedan la validación en tres equipos y la medición del reparto de carga y
-rendimiento. La integración física requiere validar y ampliar la base USB del driver
+Quedan la medición del reparto de carga y rendimiento y las limitaciones de seguridad
+anteriores. La integración física requiere validar y ampliar la base USB del driver
 propio, la biblioteca `.a` y el firmware en C con Pico SDK para la Pico H, y desarrollar
 la pantalla de selección controlada por las pulsaciones físicas J/K/L. La consulta
 inicial de estado se documenta en [usb-bringup.md](usb-bringup.md). El tramo
